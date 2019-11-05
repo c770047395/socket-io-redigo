@@ -10,13 +10,14 @@ import (
 )
 
 
+var server *socketio.Server
 
 type Msg struct {
 	Room string `json:"room"`
 	Content string `json:"content"`
 }
 
-func connRedis(server socketio.Server){
+func connRedis(){
 	c, err := redis.Dial("tcp", "47.96.128.98:6379")
 	if err != nil {
 		log.Fatalln(err)
@@ -29,23 +30,23 @@ func connRedis(server socketio.Server){
 
 	fmt.Println("接收消息....")
 
-	subChan(c,server,"chan1")
+	subChan(c,"chan1")
 }
 
-func subChan(c redis.Conn,server socketio.Server,channame string){
+func subChan(c redis.Conn,channame string){
 	psc := redis.PubSubConn{c}
 	_ = psc.Subscribe(channame)
 	for{
 		switch v := psc.Receive().(type) {
 		case redis.Message:
 			fmt.Printf("%s: message: %s\n", v.Channel, v.Data)
-			var tmp Msg
-			err := json.Unmarshal(v.Data,&tmp)
+			var data Msg
+			err := json.Unmarshal(v.Data,&data)
 			if err != nil{
 				fmt.Println("json解析失败:",err)
 				return
 			}
-			server.BroadcastToRoom(tmp.Room,"reply",tmp.Content)
+			server.BroadcastToRoom(data.Room,"reply",data.Content)
 		case redis.Subscription:
 			fmt.Printf("%s: %s %d\n", v.Channel, v.Kind, v.Count)
 		case error:
@@ -55,12 +56,16 @@ func subChan(c redis.Conn,server socketio.Server,channame string){
 	}
 }
 
-func socketServer(serverC chan socketio.Server){
-
-	server, err := socketio.NewServer(nil)
+func serverInit(){
+	var err error
+	server, err = socketio.NewServer(nil)
 	if err != nil {
 		log.Fatal(err)
 	}
+}
+
+func socketServer(){
+
 	server.OnConnect("/", func(s socketio.Conn) error {
 		s.SetContext("")
 		fmt.Println("connected:", s.ID())
@@ -94,7 +99,6 @@ func socketServer(serverC chan socketio.Server){
 	})
 	go server.Serve()
 	defer server.Close()
-	serverC<-*server
 
 	http.Handle("/socket.io/", server)
 	http.Handle("/", http.FileServer(http.Dir("./asset")))
@@ -105,8 +109,7 @@ func socketServer(serverC chan socketio.Server){
 
 
 func main() {
-	serverC := make(chan socketio.Server,1)
-	go socketServer(serverC)
-	connRedis(<-serverC)
-
+	serverInit()
+	go socketServer()
+	connRedis()
 }
